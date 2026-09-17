@@ -1,30 +1,36 @@
 # Re:Face
 
-A PySide6 desktop application for video face detection, matching, and sharp frame extraction.
+Automatically extract the sharpest frames from any video — no more manual scrolling.
+
+## What it does
+
+Scrolling through a video to find and extract sharp, usable frames is tedious. Re:Face automates this: it analyzes every frame, detects scene changes, and pulls out the sharpest ones. You can optionally filter by face or person to extract only the frames that matter.
 
 ## Features
 
-- **Video Playback** — scrub, play/pause, and mark frames directly in the app
-- **Face Marking** — detect and crop faces from any video frame with InsightFace
-- **Face Matching** — search all extracted frames for faces matching your marked references
-- **Person Detection** — YOLO-based person cropping with configurable padding
-- **Sharpness Filtering** — scene-aware sharp frame extraction with multiple methods (Laplacian, BRISQUE, FFT, etc.)
-- **Dedup & Rank** — deduplicate and rank frames by sharpness
-- **Dark macOS Theme** — VSCode-inspired dark UI with Activity Bar navigation
+- **Auto Sharp Frame Extraction** — scene-aware filtering picks the sharpest frame from each shot automatically
+- **Face Filtering** — mark reference faces, then extract only frames containing matching faces
+- **Person Filtering** — YOLO-based person detection to extract only frames with people
+- **Multiple Sharpness Methods** — Laplacian, FFT, BRISQUE, Sobel, High-Pass, Unsharp Mask
+- **Parallel FFmpeg Extraction** — multi-segment extraction for fast frame pulling
+- **Face Matching** — search all frames for faces matching your marked references (with SSIM optimization)
+- **Dark macOS Theme** — VSCode-inspired UI with Activity Bar navigation
 
-## Workflow
+## Quick Start
 
-1. **Open Video** — File > Open Video (Ctrl+O)
-2. **Mark Faces** — scrub to a clear face frame, click Mark (bookmark icon)
-3. **Extract Frames** — click Extract Frames in the sidebar (parallel FFmpeg extraction)
-4. **Process Marked Faces** — search all frames for matching faces
-5. **Export** — save matched frames or detected people
+```
+1. Open Video         (Ctrl+O)
+2. Extract Frames     (sidebar → Extract → Extract Frames)
+3. Mark Faces         (scrub to a face, click the bookmark icon)
+4. Process Faces      (sidebar → Faces → Process Marked Faces)
+5. Export             (save matched frames or sharp frames)
+```
 
 ## Project Structure
 
 ```
 video_project/
-├── extracted_frames/    # FFmpeg-extracted frames in segment subdirs
+├── extracted_frames/    # All frames pulled from video
 ├── marked_faces/        # User-marked face crops + embeddings
 ├── matched_frames/      # Frames where face matches were found
 ├── detected_people/     # YOLO person crops

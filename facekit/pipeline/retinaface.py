@@ -1,10 +1,10 @@
 import os
+import re
 import json
 import numpy as np
 import cv2 as cv
 import insightface
 from sklearn.metrics.pairwise import cosine_similarity
-from tqdm import tqdm
 
 
 class ModelLoader:
@@ -72,19 +72,20 @@ class FaceProcessor:
 
     def save_embeddings(self, faces, img_id, output_dir="embeddings"):
         embeddings = [face.embedding for face in faces]
-        labels = [face.labels for face in faces]
         path = os.path.join(output_dir, f"{img_id}_embedding.npz")
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        np.savez(path, embeddings=np.array(embeddings), labels=np.array(labels))
+        np.savez(path, embeddings=np.array(embeddings))
 
     def load_embedding(self, embedding_path):
         if not os.path.exists(embedding_path):
             print(f"Embedding not found: {embedding_path}")
-            return None, None
+            return None
         data = np.load(embedding_path, allow_pickle=True)
-        return data["embeddings"], data["labels"]
+        return data["embeddings"]
 
-    def compare_face_embedding(self, embeddings, progress_callback=None):
+    def compare_face_embedding(self, embeddings, progress_callback=None, stop_check=None):
+        if embeddings is None or len(embeddings) == 0:
+            return []
         matched = []
         frames_dir = self.utils_instance.get_frames_dir()
         seg_dirs = sorted([
@@ -93,21 +94,62 @@ class FaceProcessor:
             if os.path.isdir(os.path.join(frames_dir, d))
         ]) if os.path.isdir(frames_dir) else []
 
-        # Count total frames for progress
         total = sum(len([f for f in os.listdir(s) if f.endswith(".jpg")]) for s in seg_dirs if os.path.isdir(s))
         done = 0
+        scanned = 0
+        skipped = 0
 
-        global_frame = 0
+        def _ssim(a, b):
+            C1 = (0.01 * 255) ** 2
+            C2 = (0.03 * 255) ** 2
+            a = a.astype(np.float64)
+            b = b.astype(np.float64)
+            mu1 = cv.GaussianBlur(a, (11, 11), 1.5)
+            mu2 = cv.GaussianBlur(b, (11, 11), 1.5)
+            s1 = cv.GaussianBlur(a * a, (11, 11), 1.5) - mu1 * mu1
+            s2 = cv.GaussianBlur(b * b, (11, 11), 1.5) - mu2 * mu2
+            s12 = cv.GaussianBlur(a * b, (11, 11), 1.5) - mu1 * mu2
+            num = (2 * mu1 * mu2 + C1) * (2 * s12 + C2)
+            den = (mu1 * mu1 + mu2 * mu2 + C1) * (s1 + s2 + C2)
+            return float(np.mean(num / den))
+
+        def _frame_num(filename):
+            m = re.search(r"_(\d+)\.", filename)
+            return int(m.group(1)) if m else 0
+
+        prev_gray = None
+        prev_faces = None
+
         for seg_dir in seg_dirs:
             files = sorted([f for f in os.listdir(seg_dir) if f.endswith(".jpg")])
             for fname in files:
+                if stop_check and stop_check():
+                    break
                 img = cv.imread(os.path.join(seg_dir, fname))
                 if img is None:
                     done += 1
-                    if progress_callback and done % 10 == 0:
-                        progress_callback(done / total if total else 1, f"Scanning frame {done}/{total}")
                     continue
+
+                gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+                frame_no = _frame_num(fname)
+
+                # SSIM: skip if frame is similar to previous
+                if prev_gray is not None:
+                    ssim = _ssim(prev_gray, gray)
+                    if ssim >= 0.85:
+                        done += 1
+                        skipped += 1
+                        if progress_callback and done % 20 == 0:
+                            progress_callback(done / total if total else 1,
+                                f"Scanning {done}/{total} — scanned {scanned}, skipped {skipped}, {len(matched)} match(es)")
+                        continue
+
+                # Scene changed or first frame — run detection
                 faces = self.app.get(img)
+                prev_gray = gray
+                prev_faces = faces
+                scanned += 1
+
                 for face in faces:
                     for emb in embeddings:
                         sim = cosine_similarity(emb.reshape(1, -1), face.embedding.reshape(1, -1))
@@ -116,15 +158,18 @@ class FaceProcessor:
                                 "image_path": os.path.join(seg_dir, fname),
                                 "box": face.bbox.astype(int).tolist(),
                                 "score": float(face.det_score),
-                                "frame": str(global_frame).zfill(6),
+                                "frame": str(frame_no).zfill(6),
                             })
                 done += 1
                 if progress_callback and done % 5 == 0:
-                    progress_callback(done / total if total else 1, f"Scanning frame {done}/{total} — {len(matched)} match(es)")
-                global_frame += 1
+                    progress_callback(done / total if total else 1,
+                        f"Scanning {done}/{total} — scanned {scanned}, skipped {skipped}, {len(matched)} match(es)")
+
+            if stop_check and stop_check():
+                break
 
         out = os.path.join(self.utils_instance.get_project_dir(), "face_data.json")
         with open(out, "w") as f:
             json.dump(matched, f, indent=4)
-        print(f"Saved {len(matched)} matched frames to {out}")
+        print(f"Saved {len(matched)} matched frames to {out} (scanned {scanned}, skipped {skipped})")
         return matched

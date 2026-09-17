@@ -43,8 +43,25 @@ def crop_image_with_opencv(image_path, crop_box, output_path):
         return False
     h, w = img.shape[:2]
     x1, y1, x2, y2 = crop_box
-    x1c, x2c = max(0, x1), min(w, x2)
-    y1c, y2c = max(0, y1), min(h, y2)
+    bw, bh = x2 - x1, y2 - y1
+    if bw <= 0 or bh <= 0:
+        cv2.imwrite(output_path, img)
+        return True
+    # Shift region to stay within frame bounds while preserving size
+    if x1 < 0:
+        x2 -= x1
+        x1 = 0
+    if y1 < 0:
+        y2 -= y1
+        y1 = 0
+    if x2 > w:
+        x1 -= (x2 - w)
+        x2 = w
+    if y2 > h:
+        y1 -= (y2 - h)
+        y2 = h
+    x1c, y1c = max(0, x1), max(0, y1)
+    x2c, y2c = min(w, x2), min(h, y2)
     if x1c >= x2c or y1c >= y2c:
         cv2.imwrite(output_path, img)
         return True
@@ -75,12 +92,13 @@ def extract_frames_segment(video_path, output_folder, start_time, duration, segm
     start = time.time()
     subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
 
-    global_start = int(adj_start * video_fps / sample_rate)
+    global_start = int(adj_start * video_fps)
     frames = sorted([f for f in os.listdir(seg_dir) if f.endswith(".jpg")])
     for i, f in enumerate(frames):
+        actual_frame = global_start + i * sample_rate
         os.rename(
             os.path.join(seg_dir, f),
-            os.path.join(seg_dir, f"{video_name}_{global_start + i:06d}.jpg"),
+            os.path.join(seg_dir, f"{video_name}_{actual_frame:06d}.jpg"),
         )
     return seg_dir, len(frames)
 
@@ -129,8 +147,10 @@ def extract_frames_target(video_path, output_folder, frame_data, segment_start_t
         final = os.path.join(seg_dir, f"{video_name}_{info['frame_num']:06d}.jpg")
         if crop and info["box"]:
             b = info["box"]
-            m = 20
             sc = rescale_factor if extract_at_original_scale else 1
+            bw = (b[2] - b[0]) * sc
+            bh = (b[3] - b[1]) * sc
+            m = int(max(bw, bh) * 0.3)
             box = [int(b[0] * sc - m), int(b[1] * sc - m), int(b[2] * sc + m), int(b[3] * sc + m)]
             if crop_image_with_opencv(cur, box, final):
                 os.remove(cur)

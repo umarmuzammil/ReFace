@@ -263,7 +263,7 @@ class MainWindow(QMainWindow):
         self.progress_strip.setFixedHeight(5)
         self.progress_strip.setStyleSheet("background: #333;")
         self._progress_bar = QWidget(self.progress_strip)
-        self._progress_bar.setStyleSheet("background: #22c55e;")
+        self._progress_bar.setStyleSheet("background: #3b82f6;")
         self._progress_bar.setGeometry(0, 0, 0, 5)
         root.addWidget(self.progress_strip)
 
@@ -296,11 +296,6 @@ class MainWindow(QMainWindow):
         act_quit.setShortcut(QKeySequence("Ctrl+Q"))
         act_quit.triggered.connect(self.close)
         file_menu.addAction(act_quit)
-
-        edit_menu = mb.addMenu("&Edit")
-        act_settings = QAction("&Preferences...", self)
-        act_settings.setShortcut(QKeySequence("Ctrl+,"))
-        edit_menu.addAction(act_settings)
 
         view_menu = mb.addMenu("&View")
         for name in ["Extract", "Faces", "People", "Sharp"]:
@@ -372,9 +367,6 @@ class MainWindow(QMainWindow):
 
         return bar
 
-    def _toggle_play(self):
-        self.video_player.toggle_play()
-
     # ── Status Bar ──
 
     def _build_status_bar(self):
@@ -386,10 +378,12 @@ class MainWindow(QMainWindow):
     def _set_progress(self, pct):
         w = self.width()
         self._progress_bar.setGeometry(0, 0, int(w * pct / 100), 5)
+        self._progress_bar.setStyleSheet("background: #eab308;")
         self._progress_bar.show()
 
     def _hide_progress(self):
         self._progress_bar.setGeometry(0, 0, 0, 5)
+        self._progress_bar.setStyleSheet("background: #3b82f6;")
         self._progress_bar.hide()
 
     def _start_worker(self, target, callback=None):
@@ -422,6 +416,8 @@ class MainWindow(QMainWindow):
     def _poll_worker(self):
         if not self._worker_running:
             self._worker_timer.stop()
+            if self._worker_status:
+                self.status_label.setText(self._worker_status)
             self._hide_progress()
             self.stop_btn.setVisible(False)
             if self._worker_callback:
@@ -605,7 +601,7 @@ class MainWindow(QMainWindow):
             cv2.imwrite(face_path, face_crop)
 
             emb_path = os.path.join(out_dir, f"frame_{frame_num:06d}{suffix}_embedding.npz")
-            np.savez(emb_path, embeddings=np.array([face.embedding]), labels=np.array([face.labels]))
+            np.savez(emb_path, embeddings=np.array([face.embedding]))
 
             self.face_grid.add_face(face_crop, face_path=face_path)
 
@@ -685,7 +681,7 @@ class MainWindow(QMainWindow):
 
         flt.add_section("Source")
         self.source_combo = QComboBox()
-        self.source_combo.addItems(["Raw", "People (YOLO)", "Marked Faces"])
+        self.source_combo.addItems(["Raw", "Matched Frames", "Matched People"])
         flt.add_widget(self.source_combo)
 
         flt.add_section("Parameters")
@@ -696,6 +692,15 @@ class MainWindow(QMainWindow):
         flt.add_row([QLabel("Keep per Second"), self.sample_spin])
 
         flt.add_button("Save Sharp Frames", self._run_sharpen)
+
+        flt.add_separator()
+        flt.add_section("Sort & Rank")
+        self.topn_spin = QSpinBox()
+        self.topn_spin.setRange(1, 1000)
+        self.topn_spin.setValue(100)
+        flt.add_row([QLabel("Top N"), self.topn_spin])
+        flt.add_button("Sort Sharp Frames", self._run_sort)
+
         flt.add_stretch()
         self._register_panel("Sharp", flt)
 
@@ -720,20 +725,6 @@ class MainWindow(QMainWindow):
         ppl.add_separator()
         ppl.add_stretch()
         self._register_panel("People", ppl)
-
-        # ── SHARP ──
-        exp = SidebarPanel()
-        exp.add_title("Export")
-
-        exp.add_section("Sort & Rank")
-        self.topn_spin = QSpinBox()
-        self.topn_spin.setRange(1, 1000)
-        self.topn_spin.setValue(100)
-        exp.add_row([QLabel("Top N"), self.topn_spin])
-
-        exp.add_button("Sort Output", self._run_sort)
-        exp.add_stretch()
-        self._register_panel("Export", exp)
 
     def _register_panel(self, name, widget):
         self._sidebar_stack[name] = widget
@@ -812,17 +803,8 @@ class MainWindow(QMainWindow):
                 os.startfile(d)
 
     def _refresh_source_dropdown(self):
-        if not self.utils_instance:
-            return
-        sources = {
-            "Marked Faces": self.utils_instance.get_detected_faces_dir(),
-            "Matching Frames": self.utils_instance.get_saved_frames_dir(),
-            "People (YOLO)": self.utils_instance.get_detected_figures_dir(),
-            "Sharp Frames": self.utils_instance.get_output_dir(),
-        }
-        for name, path in sources.items():
-            if os.path.isdir(path) and self._has_images_recursive(path):
-                self.video_player.add_source(name, path)
+        if self.utils_instance:
+            self.video_player.set_project_dir(self.utils_instance.get_project_dir())
 
     # ── Pipeline Actions ──
 
@@ -843,7 +825,7 @@ class MainWindow(QMainWindow):
         fps = get_video_fps(vp)
         rescale = [1, 2, 4, 8, 16][self.rescale_combo.currentIndex()]
         qual = max(1, 31 - int((self.quality_spin.value() - 1) / 100 * 30))
-        sr = int(fps / 2)
+        sr = 1
         nd = 8
         sd = dur / nd
 
@@ -910,8 +892,14 @@ class MainWindow(QMainWindow):
                 if self._worker_stop:
                     self._worker_status = "Face search stopped"
                     break
-                emb, _ = self.face_processor.load_embedding(os.path.join(ed, f))
-                result = self.face_processor.compare_face_embedding(emb, progress_callback=lambda p, s="": self._update_match_progress(i, total_emb, p, s))
+                emb = self.face_processor.load_embedding(os.path.join(ed, f))
+                if emb is None:
+                    continue
+                result = self.face_processor.compare_face_embedding(
+                    emb,
+                    progress_callback=lambda p, s="": self._update_match_progress(i, total_emb, p, s),
+                    stop_check=lambda: self._worker_stop,
+                )
                 matched_total += len(result)
             self._worker_status = f"Face search complete \u2014 {matched_total} match(es) found"
             self._worker_progress = 100
@@ -922,8 +910,8 @@ class MainWindow(QMainWindow):
         self._start_worker(run, callback=done)
 
     def _update_match_progress(self, emb_idx, total_emb, frame_pct, status_text):
-        base = int(80 * (emb_idx) / total_emb)
-        self._worker_progress = base + int(80 * frame_pct / total_emb)
+        base = int(100 * (emb_idx) / total_emb)
+        self._worker_progress = min(100, base + int(100 * frame_pct / total_emb))
         if status_text:
             self._worker_status = status_text
 
@@ -998,27 +986,6 @@ class MainWindow(QMainWindow):
                     self._worker_status = f"Saving matched frames... {i+1}/{nd}"
             self._worker_status = f"Saved {total} matched frames"
             self._worker_result = total
-
-        def done(result):
-            self._refresh_source_dropdown()
-
-        self._start_worker(run, callback=done)
-
-    def _run_save_people(self):
-        if not self._has_project():
-            QMessageBox.warning(self, "No Project", "Open a video first.")
-            return
-        if not self._has_frames():
-            self._ask_extract_frames()
-            return
-        from facekit.pipeline.yolov import crop_and_save
-
-        def run():
-            self._worker_status = "Detecting people (YOLO)..."
-            self._worker_progress = 20
-            crop_and_save(self.utils_instance.get_file_path(), padding_factor=self.padding_spin.value())
-            self._worker_status = "People detection complete"
-            self._worker_progress = 100
 
         def done(result):
             self._refresh_source_dropdown()

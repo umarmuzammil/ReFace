@@ -90,6 +90,7 @@ class VideoPlayer(QWidget):
         self._playing = False
         self._source = "video"
         self._source_frames = []
+        self._project_dir = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -146,8 +147,16 @@ class VideoPlayer(QWidget):
         cl.addWidget(self._lbl_info)
 
         self.source_combo = QComboBox()
-        self.source_combo.setFixedWidth(140)
-        self.source_combo.addItem("Video")
+        self.source_combo.setFixedWidth(160)
+        self._source_options = [
+            ("Video", None),
+            ("Marked Faces", "marked_faces"),
+            ("Matched Frames", "matched_frames"),
+            ("People (YOLO)", "detected_people"),
+            ("Sharp Frames", "sharp_frames"),
+        ]
+        for label, _ in self._source_options:
+            self.source_combo.addItem(label)
         self.source_combo.currentTextChanged.connect(self._on_source_change)
         cl.addWidget(self.source_combo)
 
@@ -181,7 +190,7 @@ class VideoPlayer(QWidget):
         self._source = "frames"
         if not os.path.isdir(folder):
             return False
-        pat = re.compile(r"frame_(\d+)\.", re.I)
+        pat = re.compile(r"_(\d+)\.", re.I)
         files = sorted(
             [f for f in os.listdir(folder) if f.lower().endswith((".jpg", ".jpeg", ".png", ".bmp"))],
             key=lambda f: int(m.group(1)) if (m := pat.match(f)) else 0,
@@ -199,13 +208,78 @@ class VideoPlayer(QWidget):
         self._seek(0)
         return True
 
-    def add_source(self, name, folder):
-        items = [self.source_combo.itemText(i) for i in range(self.source_combo.count())]
-        if name not in items:
-            self.source_combo.addItem(name)
-        if not hasattr(self, "_source_dirs"):
-            self._source_dirs = {}
-        self._source_dirs[name] = folder
+    def set_project_dir(self, project_dir):
+        self._project_dir = project_dir
+        self._update_source_availability()
+
+    def _update_source_availability(self):
+        """Enable/disable source items based on whether folders have files."""
+        for i, (label, folder_name) in enumerate(self._source_options):
+            if folder_name is None:
+                self.source_combo.setItemData(i, True)
+                continue
+            if not hasattr(self, "_project_dir") or not self._project_dir:
+                self.source_combo.setItemData(i, False)
+                continue
+            folder = os.path.join(self._project_dir, folder_name)
+            has_files = False
+            if os.path.isdir(folder):
+                for entry in os.listdir(folder):
+                    full = os.path.join(folder, entry)
+                    if os.path.isfile(full) and entry.lower().endswith((".jpg", ".jpeg", ".png")):
+                        has_files = True
+                        break
+                    if os.path.isdir(full):
+                        for f in os.listdir(full):
+                            if f.lower().endswith((".jpg", ".jpeg", ".png")):
+                                has_files = True
+                                break
+                    if has_files:
+                        break
+            self.source_combo.setItemData(i, has_files)
+
+    def _on_source_change(self, name):
+        # Find folder for this option
+        folder_name = None
+        for label, fn in self._source_options:
+            if label == name:
+                folder_name = fn
+                break
+
+        if folder_name is None:
+            # "Video" — reload video capture
+            if self._video_path and os.path.isfile(self._video_path):
+                self.stop_play()
+                if self._cap:
+                    self._cap.release()
+                self._source = "video"
+                self._cap = cv2.VideoCapture(self._video_path)
+                if self._cap.isOpened():
+                    self._total = int(self._cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    self._fps = self._cap.get(cv2.CAP_PROP_FPS) or 24.0
+                    self.slider.setRange(0, max(0, self._total - 1))
+                    self._pos = 0
+                    self._seek(0)
+            return
+
+        # Image source — load from project folder
+        if not hasattr(self, "_project_dir") or not self._project_dir:
+            return
+        folder = os.path.join(self._project_dir, folder_name)
+        if not os.path.isdir(folder):
+            return
+        self.stop_play()
+        if self._cap:
+            self._cap.release()
+            self._cap = None
+        self._source = name
+        self._frames.clear()
+        self._collect_images(folder)
+        if self._frames:
+            self._total = len(self._frames)
+            self.slider.setRange(0, self._total - 1)
+            self._pos = 0
+            self._seek(0)
 
     def release(self):
         self.stop_play()
@@ -220,6 +294,9 @@ class VideoPlayer(QWidget):
         self.canvas.clear()
         self.slider.setRange(0, 0)
         self._lbl_info.setText("0 / 0")
+        self.source_combo.blockSignals(True)
+        self.source_combo.setCurrentIndex(0)
+        self.source_combo.blockSignals(False)
 
     def toggle_play(self):
         if self._playing:
@@ -262,40 +339,9 @@ class VideoPlayer(QWidget):
             return
         self._seek(self._pos + 1)
 
-    def _on_source_change(self, name):
-        if name == "Video":
-            if self._video_path and os.path.isfile(self._video_path):
-                self.release()
-                self._source = "video"
-                self._cap = cv2.VideoCapture(self._video_path)
-                if self._cap.isOpened():
-                    self._total = int(self._cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                    self._fps = self._cap.get(cv2.CAP_PROP_FPS) or 24.0
-                    self.slider.setRange(0, max(0, self._total - 1))
-                    self._pos = 0
-                    self._seek(0)
-            return
-        if hasattr(self, "_source_dirs") and name in self._source_dirs:
-            folder = self._source_dirs[name]
-            if not os.path.isdir(folder):
-                return
-            self.stop_play()
-            if self._cap:
-                self._cap.release()
-                self._cap = None
-            self._source = name
-            self._frames.clear()
-            # Collect images from folder and subdirectories
-            self._collect_images(folder)
-            if self._frames:
-                self._total = len(self._frames)
-                self.slider.setRange(0, self._total - 1)
-                self._pos = 0
-                self._seek(0)
-
     def _collect_images(self, folder):
         """Recursively collect images from folder and subdirectories."""
-        pat = re.compile(r"frame_(\d+)\.", re.I)
+        pat = re.compile(r"_(\d+)\.", re.I)
         exts = (".jpg", ".jpeg", ".png", ".bmp")
         files = []
         for entry in os.listdir(folder):

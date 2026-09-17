@@ -24,14 +24,14 @@ def crop_and_save(video_path, padding_factor=0.12, jpeg_quality=90):
     u = ProjectUtils(video_path)
     model = _get_model()
 
-    for s in range(8):
-        seg = os.path.join(u.get_frames_dir(), f"{u.get_base_name()}_seg{s:03d}")
+    for entry in sorted(os.listdir(u.get_frames_dir())):
+        seg = os.path.join(u.get_frames_dir(), entry)
         if not os.path.isdir(seg):
             continue
-        out = os.path.join(u.get_detected_figures_dir(), f"{u.get_base_name()}_seg{s:03d}")
+        out = os.path.join(u.get_detected_figures_dir(), entry)
         os.makedirs(out, exist_ok=True)
 
-        for fname in tqdm(sorted(os.listdir(seg)), desc=f"Seg {s}"):
+        for fname in tqdm(sorted(os.listdir(seg)), desc=entry):
             if not fname.lower().endswith((".jpg", ".png")):
                 continue
             img = cv2.imread(os.path.join(seg, fname))

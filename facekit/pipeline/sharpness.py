@@ -55,6 +55,8 @@ def get_sharpness_score(image, method):
 
 def _compute_ssim(img1, img2):
     """Simple SSIM between two grayscale images."""
+    if img1.shape != img2.shape:
+        img2 = cv2.resize(img2, (img1.shape[1], img1.shape[0]))
     C1 = (0.01 * 255) ** 2
     C2 = (0.03 * 255) ** 2
     img1 = img1.astype(np.float64)
@@ -113,10 +115,10 @@ def _detect_motion_blur(gray, threshold=15.0):
 def _collect_frames(utils_instance, source):
     """Collect all frames from segments, returning list of dicts with path, name, gray."""
     frames = []
-    if source == "People (YOLO)":
+    if source == "Matched People":
         base_dir = utils_instance.get_detected_figures_dir()
-    elif source == "Marked Faces":
-        base_dir = utils_instance.get_detected_faces_dir()
+    elif source == "Matched Frames":
+        base_dir = utils_instance.get_saved_frames_dir()
     else:
         base_dir = utils_instance.get_frames_dir()
 
