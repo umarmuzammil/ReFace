@@ -684,6 +684,12 @@ class MainWindow(QMainWindow):
         self.source_combo.addItems(["Raw", "Matched Frames", "Matched People"])
         flt.add_widget(self.source_combo)
 
+        flt.add_section("Export Options")
+        self.sharp_crop_faces_cb = QCheckBox("Crop to faces (full res)")
+        flt.add_widget(self.sharp_crop_faces_cb)
+        self.sharp_crop_people_cb = QCheckBox("Crop to people (full res)")
+        flt.add_widget(self.sharp_crop_people_cb)
+
         flt.add_section("Parameters")
         self.sample_spin = QSpinBox()
         self.sample_spin.setRange(1, 24)
@@ -947,6 +953,7 @@ class MainWindow(QMainWindow):
             detect_hardware_acceleration, get_video_duration, get_video_fps,
             extract_frames_target,
         )
+        from facekit.pipeline.sharpness import _detect_rescale_factor
         jp = os.path.join(self.utils_instance.get_project_dir(), "face_data.json")
         if not os.path.isfile(jp):
             QMessageBox.warning(self, "No Face Data",
@@ -965,15 +972,28 @@ class MainWindow(QMainWindow):
         dur = get_video_duration(vp)
         fps = get_video_fps(vp)
         rescale = [1, 2, 4, 8, 16][self.rescale_combo.currentIndex()]
+        extraction_rf = _detect_rescale_factor(self.utils_instance)
+        box_scale = extraction_rf / rescale
         qual = max(1, 31 - int((self.quality_spin.value() - 1) / 100 * 30))
         nd = 8
         sd = dur / nd
 
+        do_crop = self.cropping_cb.isChecked()
+
         def run():
+            scaled_fd = []
+            for entry in fd:
+                e = dict(entry)
+                if do_crop and "box" in e:
+                    b = e["box"]
+                    e["box"] = [int(b[0] * box_scale), int(b[1] * box_scale),
+                                int(b[2] * box_scale), int(b[3] * box_scale)]
+                scaled_fd.append(e)
+
             total = 0
             with concurrent.futures.ProcessPoolExecutor(max_workers=nd) as pool:
                 futs = [
-                    pool.submit(extract_frames_target, vp, out, fd, i * sd, sd, i, fps, hw, 1, rescale, qual, self.cropping_cb.isChecked())
+                    pool.submit(extract_frames_target, vp, out, scaled_fd, i * sd, sd, i, fps, hw, 1, rescale, qual, do_crop)
                     for i in range(nd)
                 ]
                 for i, f in enumerate(concurrent.futures.as_completed(futs)):
@@ -1004,12 +1024,15 @@ class MainWindow(QMainWindow):
         m = self.sharpness_combo.currentText()
         s = self.source_combo.currentText()
         sr = self.sample_spin.value()
+        cf = self.sharp_crop_faces_cb.isChecked()
+        cp = self.sharp_crop_people_cb.isChecked()
 
         def run():
             self._worker_status = f"Applying {m}..."
-            self._worker_progress = 20
-            extract_sharp_frames(self.utils_instance, m, s, sr)
-            self._worker_status = "Sharp frames extracted"
+            self._worker_progress = 10
+            extract_sharp_frames(self.utils_instance, m, s, sr,
+                                 crop_faces=cf, crop_people=cp)
+            self._worker_status = "Sharp frames extracted at full resolution"
             self._worker_progress = 100
 
         def done(result):

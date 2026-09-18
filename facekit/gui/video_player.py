@@ -340,18 +340,14 @@ class VideoPlayer(QWidget):
         self._seek(self._pos + 1)
 
     def _collect_images(self, folder):
-        """Recursively collect images from folder and subdirectories."""
+        """Recursively collect images from folder and all subdirectories."""
         pat = re.compile(r"_(\d+)\.", re.I)
         exts = (".jpg", ".jpeg", ".png", ".bmp")
         files = []
-        for entry in os.listdir(folder):
-            full = os.path.join(folder, entry)
-            if os.path.isfile(full) and entry.lower().endswith(exts):
-                files.append(full)
-            elif os.path.isdir(full):
-                for f in os.listdir(full):
-                    if f.lower().endswith(exts):
-                        files.append(os.path.join(full, f))
+        for root, dirs, fnames in os.walk(folder):
+            for f in fnames:
+                if f.lower().endswith(exts):
+                    files.append(os.path.join(root, f))
         files.sort(key=lambda f: int(m.group(1)) if (m := pat.match(os.path.basename(f))) else 0)
         for fp in files:
             img = cv2.imread(fp)

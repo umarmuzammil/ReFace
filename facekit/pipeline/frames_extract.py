@@ -153,12 +153,17 @@ def extract_frames_target(video_path, output_folder, frame_data, segment_start_t
             m = int(max(bw, bh) * 0.3)
             box = [int(b[0] * sc - m), int(b[1] * sc - m), int(b[2] * sc + m), int(b[3] * sc + m)]
             if crop_image_with_opencv(cur, box, final):
-                os.remove(cur)
+                if os.path.exists(cur):
+                    os.remove(cur)
                 ok += 1
             else:
+                if cur != final and os.path.exists(final):
+                    os.remove(final)
                 os.rename(cur, final)
                 ok += 1
         else:
+            if cur != final and os.path.exists(final):
+                os.remove(final)
             os.rename(cur, final)
             ok += 1
     return seg_dir, ok

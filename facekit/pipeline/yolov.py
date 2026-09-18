@@ -1,4 +1,6 @@
 import os
+import re
+import json
 import cv2
 import numpy as np
 import torch
@@ -23,6 +25,7 @@ def _get_model():
 def crop_and_save(video_path, padding_factor=0.12, jpeg_quality=90):
     u = ProjectUtils(video_path)
     model = _get_model()
+    people_data = []
 
     for entry in sorted(os.listdir(u.get_frames_dir())):
         seg = os.path.join(u.get_frames_dir(), entry)
@@ -49,6 +52,13 @@ def crop_and_save(video_path, padding_factor=0.12, jpeg_quality=90):
             x1, y1 = np.min(boxes[:, 0]), np.min(boxes[:, 1])
             x2, y2 = np.max(boxes[:, 2]), np.max(boxes[:, 3])
 
+            m = re.search(r"_(\d+)\.", fname)
+            frame_no = int(m.group(1)) if m else 0
+            people_data.append({
+                "frame": str(frame_no).zfill(6),
+                "box": [int(x1), int(y1), int(x2), int(y2)],
+            })
+
             px = int((x2 - x1) * padding_factor)
             py = int((y2 - y1) * padding_factor)
             crop = img[
@@ -57,3 +67,9 @@ def crop_and_save(video_path, padding_factor=0.12, jpeg_quality=90):
             ]
             if crop.size > 0:
                 cv2.imwrite(os.path.join(out, fname), crop, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+
+    if people_data:
+        jp = os.path.join(u.get_detected_figures_dir(), "people_data.json")
+        with open(jp, "w") as f:
+            json.dump(people_data, f, indent=4)
+        print(f"Saved {len(people_data)} people detections to {jp}")
